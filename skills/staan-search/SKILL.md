@@ -40,12 +40,20 @@ page text — it fetches every result page, so it costs more and takes longer.
 
 ### Optional parameters
 
-- `market` — `fr-fr` | `en-us` | `de-de`. Only pass it to override the
-  operator's configured market for one call. The configured value is shown in
-  the tool settings; do not pass `market` to restate it.
-- `offset` — `0` | `10` | `20` | `30` for results past the first ten. `30` is
+- `market` — `fr-fr` · `de-de` · `en-us` · `en-gb` · `en-ie` · `en-fr` ·
+  `en-ca` · `en-au` · `en-nz` · `en-in` · `en-sg` · `en-za`. Only pass it when
+  the operator's configured market is actually wrong for the question — e.g.
+  `en-gb` instead of `en-us` for UK sources, or `en-fr` for English-language
+  pages hosted in France. Do not pass it to restate the configured value.
+- `offset` — `0` · `10` · `20` · `30` for results past the first ten. `30` is
   the hard ceiling (40 results). Use it only after the first page was not
   enough; do not page speculatively.
+- `max_snippets` — fewer scored excerpts per page, `1`–`10`. **This can only
+  lower the operator's configured ceiling, never raise it.** Use it when
+  context is tight and you only need the best passage: pass `1` when you plan
+  to quote a single quote per page, `2` for a couple. Asking for more than the
+  ceiling is silently capped, so do not bother trying — and do not report that
+  you got more than you asked for.
 
 ### Writing the query
 
@@ -158,6 +166,9 @@ blockquote quotes and a documentation-style line instead of a raw snippet.
   follow-up queries on your own initiative.
 - **One search per user request** unless the user asked for several angles.
   Each call costs quota, and Staan allows only 20 requests/second.
+- **Trim the excerpt count when you already have enough.** `max_snippets: 1`
+  or `2` on a follow-up `enriched_search` is cheaper than re-reading a full
+  result set you have already seen.
 - **Never claim a fact the results do not contain.** If the excerpts do not
   answer the question, say the search came up short and offer a different
   query — do not fill the gap from memory without labelling it as your own

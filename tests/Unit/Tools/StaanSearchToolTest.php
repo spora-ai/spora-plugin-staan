@@ -89,7 +89,8 @@ it('fails on an unknown market and names the valid ones', function () {
 
     expect($result->success)->toBeFalse()
         ->and($result->content)->toContain('Unsupported market')
-        ->and($result->content)->toContain('fr-fr, en-us, de-de')
+        ->and($result->content)->toContain('fr-fr')
+        ->and($result->content)->toContain('en-za')
         ->and($harness->requests)->toBe([]);
 });
 
@@ -206,6 +207,69 @@ it('falls back to the api default market when nothing is configured', function (
     $harness->call(['query' => 'vector db']);
 
     expect($harness->sentPayload()['market'])->toBe('fr-fr');
+});
+
+it('accepts every market in the api reference, not just the three in the prose guides', function (string $market) {
+    $harness = harness();
+    $result = $harness->call(['query' => 'vector db', 'market' => $market]);
+
+    expect($result->success)->toBeTrue()
+        ->and($harness->sentPayload()['market'])->toBe($market);
+})->with([
+    'fr-fr', 'de-de', 'en-us', 'en-gb', 'en-ie', 'en-fr',
+    'en-ca', 'en-au', 'en-nz', 'en-in', 'en-sg', 'en-za',
+]);
+
+it('names every supported market when the value is not recognised', function () {
+    $result = harness()->call(['query' => 'vector db', 'market' => 'es-es']);
+
+    expect($result->success)->toBeFalse()
+        ->and($result->content)->toContain('fr-fr, de-de, en-us, en-gb, en-ie, en-fr')
+        ->and($result->content)->toContain('en-ca, en-au, en-nz, en-in, en-sg, en-za');
+});
+
+/* ------------------------------------------------------ excerpt ceiling -- */
+
+it('uses the configured ceiling when the agent does not ask', function () {
+    $harness = harness(['max_snippets' => '5']);
+    $harness->call(['query' => 'vector db', 'action' => 'enriched_search']);
+
+    expect($harness->sentPayload()['max_snippets'])->toBe(5);
+});
+
+it('lets the agent lower the excerpt count to save context', function () {
+    $harness = harness(['max_snippets' => '5']);
+    $harness->call(['query' => 'vector db', 'action' => 'enriched_search', 'max_snippets' => 1]);
+
+    expect($harness->sentPayload()['max_snippets'])->toBe(1);
+});
+
+it('caps an agent asking for more than the operator ceiling', function () {
+    $harness = harness(['max_snippets' => '3']);
+    $harness->call(['query' => 'vector db', 'action' => 'enriched_search', 'max_snippets' => 10]);
+
+    expect($harness->sentPayload()['max_snippets'])->toBe(3);
+});
+
+it('never lets the agent push past the api maximum even with a raised ceiling', function () {
+    $harness = harness(['max_snippets' => '50']);
+    $harness->call(['query' => 'vector db', 'action' => 'enriched_search', 'max_snippets' => 10]);
+
+    expect($harness->sentPayload()['max_snippets'])->toBe(10);
+});
+
+it('ignores the excerpt parameter entirely on the plain search operation', function () {
+    $harness = harness(['max_snippets' => '5']);
+    $harness->call(['query' => 'vector db', 'max_snippets' => 1]);
+
+    expect($harness->sentPayload())->not->toHaveKey('max_snippets');
+});
+
+it('clamps a nonsense excerpt request instead of failing the call', function () {
+    $harness = harness(['max_snippets' => '5']);
+    $harness->call(['query' => 'vector db', 'action' => 'enriched_search', 'max_snippets' => 0]);
+
+    expect($harness->sentPayload()['max_snippets'])->toBe(1);
 });
 
 /* ---------------------------------------------------------------- offset -- */

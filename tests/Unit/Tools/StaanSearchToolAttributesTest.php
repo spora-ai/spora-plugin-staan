@@ -48,6 +48,17 @@ function staanTool(): StaanSearchTool
     );
 }
 
+/**
+ * The prose guides advertise only fr-fr / en-us / de-de. The v2 API reference
+ * enum is wider and the docs site collapses its tail behind "show 4 more", so
+ * this list was recovered from the reference page source.
+ */
+const STAAN_MARKETS = [
+    'fr-fr', 'de-de',
+    'en-us', 'en-gb', 'en-ie', 'en-fr',
+    'en-ca', 'en-au', 'en-nz', 'en-in', 'en-sg', 'en-za',
+];
+
 it('exposes exactly two operations, with search as the fallback', function () {
     $names = array_map(static fn(object $op): string => $op->name, staanAttributes(ToolOperation::class));
 
@@ -95,11 +106,11 @@ it('requires only the api key', function () {
     }
 });
 
-it('offers the market dropdown over the three supported markets', function () {
+it('offers the market dropdown over every market in the api reference', function () {
     $market = staanAttribute(ToolSetting::class, 'market');
 
     expect($market->type)->toBe('select')
-        ->and(array_keys($market->options))->toBe(['fr-fr', 'en-us', 'de-de'])
+        ->and(array_keys($market->options))->toBe(STAAN_MARKETS)
         ->and($market->default)->toBe('fr-fr')
         ->and($market->exposeToLlm)->toBeTrue();
 });
@@ -118,19 +129,35 @@ it('ships the retrieval-tuning dials with the documented defaults', function () 
 it('declares query as the only required parameter, in payload order', function () {
     $names = array_map(static fn(object $p): string => $p->name, staanAttributes(ToolParameter::class));
 
-    expect($names)->toBe(['query', 'market', 'offset'])
+    expect($names)->toBe(['query', 'market', 'offset', 'max_snippets'])
         ->and(staanAttribute(ToolParameter::class, 'query')->required)->toBeTrue();
 
-    foreach (['market', 'offset'] as $name) {
+    foreach (['market', 'offset', 'max_snippets'] as $name) {
         expect(staanAttribute(ToolParameter::class, $name)->required)->toBeFalse();
     }
 });
 
 it('mirrors the market enum on the parameter and the setting', function () {
-    $expected = ['fr-fr', 'en-us', 'de-de'];
+    expect(staanAttribute(ToolParameter::class, 'market')->enum)->toBe(STAAN_MARKETS)
+        ->and(array_keys(staanAttribute(ToolSetting::class, 'market')->options))->toBe(STAAN_MARKETS);
+});
 
-    expect(staanAttribute(ToolParameter::class, 'market')->enum)->toBe($expected)
-        ->and(array_keys(staanAttribute(ToolSetting::class, 'market')->options))->toBe($expected);
+it('tells the agent the excerpt parameter can only lower the ceiling', function () {
+    $description = staanAttribute(ToolParameter::class, 'max_snippets')->description;
+
+    expect(staanAttribute(ToolParameter::class, 'max_snippets')->type)->toBe('integer')
+        ->and(staanAttribute(ToolParameter::class, 'max_snippets')->minimum)->toBe(1)
+        ->and(staanAttribute(ToolParameter::class, 'max_snippets')->maximum)->toBe(10)
+        ->and($description)->toContain('only LOWER')
+        ->and($description)->toContain('never granted');
+});
+
+it('marks the excerpt setting as a ceiling, not a fixed value', function () {
+    $setting = staanAttribute(ToolSetting::class, 'max_snippets');
+
+    expect($setting->label)->toContain('ceiling')
+        ->and($setting->description)->toContain('ceiling')
+        ->and($setting->description)->toContain('never more');
 });
 
 it('bounds the offset parameter to the api page window', function () {

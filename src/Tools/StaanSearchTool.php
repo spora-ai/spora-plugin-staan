@@ -69,9 +69,18 @@ use Throwable;
     description: 'Language and region for the search index. Sent to Staan unless the agent overrides it per call.',
     default: 'fr-fr',
     options: [
-        'fr-fr' => 'French — France (fr-fr)',
-        'en-us' => 'English — United States (en-us)',
-        'de-de' => 'German — Germany (de-de)',
+        'fr-fr' => 'French — France',
+        'de-de' => 'German — Germany',
+        'en-us' => 'English — United States',
+        'en-gb' => 'English — United Kingdom',
+        'en-ie' => 'English — Ireland',
+        'en-fr' => 'English — France',
+        'en-ca' => 'English — Canada',
+        'en-au' => 'English — Australia',
+        'en-nz' => 'English — New Zealand',
+        'en-in' => 'English — India',
+        'en-sg' => 'English — Singapore',
+        'en-za' => 'English — South Africa',
     ],
     exposeToLlm: true,
 )]
@@ -79,14 +88,14 @@ use Throwable;
     key: 'min_score',
     label: 'Minimum excerpt score',
     type: 'text',
-    description: 'For enriched_search: drop excerpts scoring below this relevance (0-1, default 0.2). Raise it to cut noise, lower it for broader coverage.',
+    description: 'For enriched_search: drop excerpts scoring below this relevance (0-1, default 0.2). Raise it to cut noise, lower it for broader coverage. The agent cannot override this — a lower floor means more context.',
     default: '0.2',
 )]
 #[ToolSetting(
     key: 'max_snippets',
-    label: 'Excerpts per page',
+    label: 'Excerpts per page (ceiling)',
     type: 'text',
-    description: 'For enriched_search: how many scored excerpts to keep per page (1-10, default 3). Each excerpt is truncated to 800 characters, so the worst case is result_limit x this x 800 characters of context.',
+    description: 'For enriched_search: the most scored excerpts kept per page (1-10, default 3). This is a ceiling — the agent may ask for fewer on a call to save context, but never more. Each excerpt is truncated to 800 characters, so the worst case is result_limit x this x 800 characters.',
     default: '3',
 )]
 #[ToolSetting(
@@ -111,9 +120,12 @@ use Throwable;
 #[ToolParameter(
     name: 'market',
     type: 'string',
-    description: 'Override the market for this call. Defaults to the operator-configured market shown in the tool settings.',
+    description: 'Override the market for this call. Defaults to the operator-configured market shown in the tool settings. Only pass it when the operator\'s default is wrong for this question — e.g. ask for en-gb over en-us for UK sources, or en-fr for English-language pages hosted in France.',
     required: false,
-    enum: ['fr-fr', 'en-us', 'de-de'],
+    enum: [
+        'fr-fr', 'de-de', 'en-us', 'en-gb', 'en-ie', 'en-fr',
+        'en-ca', 'en-au', 'en-nz', 'en-in', 'en-sg', 'en-za',
+    ],
 )]
 #[ToolParameter(
     name: 'offset',
@@ -122,6 +134,14 @@ use Throwable;
     required: false,
     minimum: 0,
     maximum: 30,
+)]
+#[ToolParameter(
+    name: 'max_snippets',
+    type: 'integer',
+    description: 'Fewer scored excerpts to keep per page, 1-10. Use this to save context when you already have enough (for example 1 when you only need to quote the single best passage). This can only LOWER the operator\'s configured ceiling — asking for more is capped, never granted. Omit it to use the configured value.',
+    required: false,
+    minimum: 1,
+    maximum: 10,
 )]
 final class StaanSearchTool extends AbstractTool
 {
@@ -144,7 +164,16 @@ final class StaanSearchTool extends AbstractTool
     /** Longest error body echoed back to the LLM before truncation. */
     private const MAX_ERROR_BODY_CHARS = 300;
 
-    private const MARKETS = ['fr-fr', 'en-us', 'de-de'];
+    /**
+     * The full market list from the v2 API reference. The prose guides only
+     * advertise fr-fr / en-us / de-de; the reference's enum is wider, and the
+     * docs site collapses the tail behind "show 4 more".
+     */
+    private const MARKETS = [
+        'fr-fr', 'de-de',
+        'en-us', 'en-gb', 'en-ie', 'en-fr',
+        'en-ca', 'en-au', 'en-nz', 'en-in', 'en-sg', 'en-za',
+    ];
     private const DEFAULT_MARKET = 'fr-fr';
 
     private const DEFAULT_MIN_SCORE = 0.2;
@@ -193,7 +222,7 @@ final class StaanSearchTool extends AbstractTool
 
     /**
      * @param array<string, mixed> $arguments
-     * @return array{query: string, market: string, offset: int, offset_capped: bool, settings: array<string, mixed>}|ToolResult
+     * @return array{query: string, market: string, offset: int, offset_capped: bool, excerpts: int, settings: array<string, mixed>}|ToolResult
      */
     private function prepare(array $arguments, int $agentId, ?int $userId): array|ToolResult
     {
@@ -236,6 +265,7 @@ final class StaanSearchTool extends AbstractTool
             'market'        => $market,
             'offset'        => $offset,
             'offset_capped' => $requestedOffset !== null && $offset !== $this->toIntOrNull($requestedOffset),
+            'excerpts'      => $this->resolveExcerpts($arguments['max_snippets'] ?? null, $settings['max_snippets'] ?? null),
             'settings'      => $settings,
         ];
     }
@@ -272,7 +302,29 @@ final class StaanSearchTool extends AbstractTool
     }
 
     /**
-     * @param array{query: string, market: string, offset: int, offset_capped: bool, settings: array<string, mixed>} $prepared
+     * The operator's `max_snippets` is a ceiling, not a fixed value: the agent
+     * may ask for fewer excerpts to save context, but never more.
+     *
+     * An over-ask is capped silently rather than rejected. The operator's budget
+     * is protected either way, and a hard failure would only teach the model
+     * that the parameter is a trap.
+     */
+    private function resolveExcerpts(mixed $requested, mixed $configured): int
+    {
+        $ceiling = $this->clampInt(
+            $configured,
+            self::DEFAULT_MAX_SNIPPETS,
+            1,
+            self::MAX_SNIPPETS_PER_PAGE,
+        );
+
+        $asked = $this->toIntOrNull($requested);
+
+        return $asked === null ? $ceiling : max(1, min($ceiling, $asked));
+    }
+
+    /**
+     * @param array{query: string, market: string, offset: int, offset_capped: bool, excerpts: int, settings: array<string, mixed>} $prepared
      * @return array<string, mixed>
      */
     private function buildPayload(array $prepared, bool $enriched): array
@@ -285,16 +337,10 @@ final class StaanSearchTool extends AbstractTool
         ];
 
         if ($enriched) {
-            $settings = $prepared['settings'];
             $payload['extra_snippets'] = true;
-            $payload['max_snippets'] = $this->clampInt(
-                $settings['max_snippets'] ?? null,
-                self::DEFAULT_MAX_SNIPPETS,
-                1,
-                self::MAX_SNIPPETS_PER_PAGE,
-            );
+            $payload['max_snippets'] = $prepared['excerpts'];
             $payload['min_score'] = $this->clampFloat(
-                $settings['min_score'] ?? null,
+                $prepared['settings']['min_score'] ?? null,
                 self::DEFAULT_MIN_SCORE,
                 0.0,
                 1.0,
@@ -412,7 +458,7 @@ final class StaanSearchTool extends AbstractTool
 
     /**
      * @param array<string, mixed> $data
-     * @param array{query: string, market: string, offset: int, offset_capped: bool, settings: array<string, mixed>} $prepared
+     * @param array{query: string, market: string, offset: int, offset_capped: bool, excerpts: int, settings: array<string, mixed>} $prepared
      */
     private function formatResults(array $data, bool $enriched, array $prepared): string
     {
@@ -519,7 +565,7 @@ final class StaanSearchTool extends AbstractTool
 
     /**
      * @param array<string, mixed> $data
-     * @param array{query: string, market: string, offset: int, offset_capped: bool, settings: array<string, mixed>} $prepared
+     * @param array{query: string, market: string, offset: int, offset_capped: bool, excerpts: int, settings: array<string, mixed>} $prepared
      */
     private function formatFooter(
         array $data,
