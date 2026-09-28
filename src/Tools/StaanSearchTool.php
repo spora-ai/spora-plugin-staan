@@ -311,13 +311,23 @@ final class StaanSearchTool extends AbstractTool
     }
 
     /**
-     * First failure message, or null when the call is well formed. The
-     * over-length check runs before the key check so the agent gets the
-     * actionable fix rather than a credentials complaint.
+     * First failure message, or null when the call is well formed. The query
+     * is checked before the key so the agent gets the actionable fix rather
+     * than a credentials complaint.
      *
      * @param array<string, mixed> $settings
      */
     private function validate(string $query, array $settings): ?string
+    {
+        $queryError = $this->queryError($query);
+        if ($queryError !== null) {
+            return $queryError;
+        }
+
+        return $settings['api_key'] === '' ? self::ERR_API_KEY_MISSING : null;
+    }
+
+    private function queryError(string $query): ?string
     {
         if ($query === '') {
             return self::ERR_EMPTY_QUERY;
@@ -332,10 +342,6 @@ final class StaanSearchTool extends AbstractTool
                 self::MAX_QUERY_CHARS,
                 $length,
             );
-        }
-
-        if ($settings['api_key'] === '') {
-            return self::ERR_API_KEY_MISSING;
         }
 
         return null;
