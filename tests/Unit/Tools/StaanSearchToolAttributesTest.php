@@ -3,8 +3,6 @@
 declare(strict_types=1);
 
 use Mockery as M;
-use ReflectionAttribute;
-use ReflectionClass;
 use Spora\Plugins\Staan\Tools\StaanSearchTool;
 use Spora\Services\ToolConfigService;
 use Spora\Tools\Attributes\Tool;

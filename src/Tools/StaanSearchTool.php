@@ -22,8 +22,9 @@ use Throwable;
  *
  * One HTTP endpoint serves both modes; enrichment is switched on by adding
  * `extra_snippets` to the payload rather than by calling a different URL. The
- * two operations therefore share a single request path and a single formatter,
- * and differ only in the three enrichment fields plus latency.
+ * two operations therefore share a single request path and differ only in
+ * three payload fields plus latency. Rendering lives in
+ * {@see StaanResultFormatter}.
  *
  * `search` is declared first on purpose: {@see \Spora\Tools\Traits\HasOperations}
  * falls back to the first operation when the LLM omits the `action`
@@ -109,7 +110,7 @@ use Throwable;
     key: 'http_timeout',
     label: 'HTTP Timeout',
     type: 'text',
-    description: 'Seconds before an HTTP request fails (default: 30). enriched_search fetches every result page, so give it more headroom than the docs\' 10s minimum.',
+    description: 'Seconds before an HTTP request fails (default: 30, or SPORA_TOOL_HTTP_TIMEOUT when set). enriched_search fetches every result page, so keep headroom above the 10s the docs recommend.',
 )]
 #[ToolParameter(
     name: 'query',
@@ -147,6 +148,8 @@ final class StaanSearchTool extends AbstractTool
 {
     private const ENDPOINT = 'https://api.staan.ai/v2/search/web';
 
+    private const CONTENT_TYPE_JSON = 'application/json';
+
     /** Staan's documented hard limit; longer queries are rejected, not truncated. */
     private const MAX_QUERY_CHARS = 400;
 
@@ -154,20 +157,19 @@ final class StaanSearchTool extends AbstractTool
     private const MAX_OFFSET = 30;
     private const MAX_SNIPPETS_PER_PAGE = 10;
 
-    /**
-     * Per-excerpt cap. Staan's chunks run 300-1800 characters; truncating to
-     * 800 keeps the opening of a typical chunk and bounds the worst case at
-     * result_limit x max_snippets x 800 characters of injected context.
-     */
-    private const MAX_CHUNK_CHARS = 800;
+    private const DEFAULT_MIN_SCORE = 0.2;
+    private const DEFAULT_MAX_SNIPPETS = 3;
+    private const DEFAULT_RESULT_LIMIT = 10;
+    private const DEFAULT_TIMEOUT = 30;
+    private const MAX_TIMEOUT = 300;
 
     /** Longest error body echoed back to the LLM before truncation. */
     private const MAX_ERROR_BODY_CHARS = 300;
 
     /**
      * The full market list from the v2 API reference. The prose guides only
-     * advertise fr-fr / en-us / de-de; the reference's enum is wider, and the
-     * docs site collapses the tail behind "show 4 more".
+     * advertise fr-fr / en-us / de-de, and the reference page collapses the
+     * tail of its enum behind a "show 4 more" control.
      */
     private const MARKETS = [
         'fr-fr', 'de-de',
@@ -175,11 +177,6 @@ final class StaanSearchTool extends AbstractTool
         'en-ca', 'en-au', 'en-nz', 'en-in', 'en-sg', 'en-za',
     ];
     private const DEFAULT_MARKET = 'fr-fr';
-
-    private const DEFAULT_MIN_SCORE = 0.2;
-    private const DEFAULT_MAX_SNIPPETS = 3;
-    private const DEFAULT_RESULT_LIMIT = 10;
-    private const DEFAULT_TIMEOUT = 30;
 
     private const ERR_EMPTY_QUERY = 'The search query cannot be empty.';
     private const ERR_API_KEY_MISSING = 'Staan API key is not configured for this agent. Please edit the Staan Search settings.';
@@ -189,11 +186,16 @@ final class StaanSearchTool extends AbstractTool
     private const LOG_API_ERROR = 'Staan API error';
     private const LOG_EXCEPTION = 'StaanSearchTool exception';
 
+    private readonly StaanResultFormatter $formatter;
+
     public function __construct(
         private readonly ToolConfigService $configService,
         private readonly HttpClientInterface $httpClient,
         private readonly ?LoggerInterface $logger = null,
-    ) {}
+        ?StaanResultFormatter $formatter = null,
+    ) {
+        $this->formatter = $formatter ?? new StaanResultFormatter();
+    }
 
     public function execute(
         array $arguments,
@@ -204,16 +206,24 @@ final class StaanSearchTool extends AbstractTool
     ): ToolResult {
         $operation = $this->getOperationName($arguments);
 
-        return match ($operation) {
-            'search'          => $this->run($arguments, $agentId, $userId, false),
-            'enriched_search' => $this->run($arguments, $agentId, $userId, true),
-            default           => ToolResult::fail("Unknown operation: {$operation}"),
-        };
+        try {
+            return match ($operation) {
+                'search'          => $this->run($arguments, $agentId, $userId, false),
+                'enriched_search' => $this->run($arguments, $agentId, $userId, true),
+                default           => ToolResult::fail("Unknown operation: {$operation}"),
+            };
+        } catch (Throwable $e) {
+            // Reached only for a settings-layer fault (DB or key decryption) —
+            // everything downstream is already a ToolResult.
+            $this->logger?->error(self::LOG_EXCEPTION, ['exception' => $e]);
+
+            return ToolResult::fail('Search tool error: ' . $e->getMessage());
+        }
     }
 
     public function describeAction(array $arguments): string
     {
-        $query = trim((string) ($arguments['query'] ?? ''));
+        $query = $this->text($arguments['query'] ?? null);
 
         return $this->getOperationName($arguments) === 'enriched_search'
             ? "Search the web via Staan with scored page excerpts for: '{$query}'"
@@ -222,32 +232,63 @@ final class StaanSearchTool extends AbstractTool
 
     /**
      * @param array<string, mixed> $arguments
-     * @return array{query: string, market: string, offset: int, offset_capped: bool, excerpts: int, settings: array<string, mixed>}|ToolResult
+     */
+    private function run(array $arguments, int $agentId, ?int $userId, bool $enriched): ToolResult
+    {
+        $prepared = $this->prepare($arguments, $agentId, $userId);
+        if ($prepared instanceof ToolResult) {
+            return $prepared;
+        }
+
+        try {
+            $data = $this->request(
+                $this->buildPayload($prepared, $enriched),
+                (string) $prepared['settings']['api_key'],
+                $this->effectiveTimeout($prepared['settings']),
+            );
+
+            return new ToolResult(
+                true,
+                $this->formatter->format($data, $enriched, new StaanFormatContext(
+                    query: $prepared['query'],
+                    offset: $prepared['offset'],
+                    offsetAdjusted: $prepared['offset_adjusted'],
+                    resultLimit: $this->clampInt(
+                        $prepared['settings']['result_limit'] ?? null,
+                        self::DEFAULT_RESULT_LIMIT,
+                        1,
+                        self::PAGE_SIZE,
+                    ),
+                )),
+                [
+                    'search_id' => is_string($data['search_id'] ?? null) ? $data['search_id'] : null,
+                    'market'    => $prepared['market'],
+                    'offset'    => $prepared['offset'],
+                    'enriched'  => $enriched,
+                ],
+            );
+        } catch (Throwable $e) {
+            $this->logger?->error(self::LOG_EXCEPTION, ['exception' => $e]);
+
+            return ToolResult::fail('Search tool error: ' . $e->getMessage());
+        }
+    }
+
+    /**
+     * @param  array<string, mixed> $arguments
+     * @return array{query: string, market: string, offset: int, offset_adjusted: bool, excerpts: int, settings: array<string, mixed>}|ToolResult
      */
     private function prepare(array $arguments, int $agentId, ?int $userId): array|ToolResult
     {
-        $query = trim((string) ($arguments['query'] ?? ''));
-        if ($query === '') {
-            return ToolResult::fail(self::ERR_EMPTY_QUERY);
-        }
-
-        // Never truncate an over-long query: a silently shortened query returns
-        // results for a different question and the agent reasons about fiction.
-        $length = mb_strlen($query);
-        if ($length > self::MAX_QUERY_CHARS) {
-            return ToolResult::fail(sprintf(
-                'Staan rejects queries longer than %d characters (got %d). Shorten it to the keywords that matter.',
-                self::MAX_QUERY_CHARS,
-                $length,
-            ));
-        }
+        $query = $this->text($arguments['query'] ?? null);
 
         $settings = $this->configService->getEffectiveSettings(static::class, $agentId, $userId);
-        $apiKey = trim((string) ($settings['api_key'] ?? ''));
-        if ($apiKey === '') {
-            return ToolResult::fail(self::ERR_API_KEY_MISSING);
+        $settings['api_key'] = $this->text($settings['api_key'] ?? null);
+
+        $invalid = $this->validate($query, $settings);
+        if ($invalid !== null) {
+            return ToolResult::fail($invalid);
         }
-        $settings['api_key'] = $apiKey;
 
         $market = $this->resolveMarket($arguments['market'] ?? null, $settings['market'] ?? null);
         if ($market === null) {
@@ -257,26 +298,60 @@ final class StaanSearchTool extends AbstractTool
             ));
         }
 
-        $requestedOffset = $arguments['offset'] ?? null;
-        $offset = $this->resolveOffset($requestedOffset);
+        [$offset, $offsetAdjusted] = $this->resolveOffset($arguments['offset'] ?? null);
 
         return [
-            'query'         => $query,
-            'market'        => $market,
-            'offset'        => $offset,
-            'offset_capped' => $requestedOffset !== null && $offset !== $this->toIntOrNull($requestedOffset),
-            'excerpts'      => $this->resolveExcerpts($arguments['max_snippets'] ?? null, $settings['max_snippets'] ?? null),
-            'settings'      => $settings,
+            'query'           => $query,
+            'market'          => $market,
+            'offset'          => $offset,
+            'offset_adjusted' => $offsetAdjusted,
+            'excerpts'        => $this->resolveExcerpts($arguments['max_snippets'] ?? null, $settings['max_snippets'] ?? null),
+            'settings'        => $settings,
         ];
     }
 
     /**
-     * LLM-supplied values are rejected, not coerced: a market the API would
-     * reject should surface as a correctable error, not silent fallback.
+     * First failure message, or null when the call is well formed. The
+     * over-length check runs before the key check so the agent gets the
+     * actionable fix rather than a credentials complaint.
+     *
+     * @param array<string, mixed> $settings
+     */
+    private function validate(string $query, array $settings): ?string
+    {
+        if ($query === '') {
+            return self::ERR_EMPTY_QUERY;
+        }
+
+        // Never truncate an over-long query: a silently shortened query returns
+        // results for a different question and the agent reasons about fiction.
+        $length = mb_strlen($query);
+        if ($length > self::MAX_QUERY_CHARS) {
+            return sprintf(
+                'Staan rejects queries longer than %d characters (got %d). Shorten it to the keywords that matter.',
+                self::MAX_QUERY_CHARS,
+                $length,
+            );
+        }
+
+        if ($settings['api_key'] === '') {
+            return self::ERR_API_KEY_MISSING;
+        }
+
+        return null;
+    }
+
+    /**
+     * Each side is resolved independently: an agent that sends `market: ""`
+     * must fall through to the operator's setting, not short-circuit past it.
+     * A value that is present but wrong is rejected rather than coerced.
      */
     private function resolveMarket(mixed $requested, mixed $configured): ?string
     {
-        $candidate = trim((string) ($requested ?? $configured ?? ''));
+        $candidate = $this->text($requested);
+        if ($candidate === '') {
+            $candidate = $this->text($configured);
+        }
         if ($candidate === '') {
             return self::DEFAULT_MARKET;
         }
@@ -284,21 +359,19 @@ final class StaanSearchTool extends AbstractTool
         return in_array($candidate, self::MARKETS, true) ? $candidate : null;
     }
 
-    private function resolveOffset(mixed $requested): int
+    /**
+     * @return array{int, bool} the page-aligned offset, and whether it had to move
+     */
+    private function resolveOffset(mixed $requested): array
     {
         $numeric = $this->toIntOrNull($requested);
         if ($numeric === null) {
-            return 0;
+            return [0, false];
         }
 
-        $clamped = max(0, min(self::MAX_OFFSET, $numeric));
+        $page = intdiv(max(0, min(self::MAX_OFFSET, $numeric)), self::PAGE_SIZE) * self::PAGE_SIZE;
 
-        return intdiv($clamped, self::PAGE_SIZE) * self::PAGE_SIZE;
-    }
-
-    private function toIntOrNull(mixed $value): ?int
-    {
-        return is_numeric($value) ? (int) $value : null;
+        return [$page, $page !== $numeric];
     }
 
     /**
@@ -323,8 +396,13 @@ final class StaanSearchTool extends AbstractTool
         return $asked === null ? $ceiling : max(1, min($ceiling, $asked));
     }
 
+    private function toIntOrNull(mixed $value): ?int
+    {
+        return is_numeric($value) ? (int) $value : null;
+    }
+
     /**
-     * @param array{query: string, market: string, offset: int, offset_capped: bool, excerpts: int, settings: array<string, mixed>} $prepared
+     * @param array{query: string, market: string, offset: int, offset_adjusted: bool, excerpts: int, settings: array<string, mixed>} $prepared
      * @return array<string, mixed>
      */
     private function buildPayload(array $prepared, bool $enriched): array
@@ -351,40 +429,6 @@ final class StaanSearchTool extends AbstractTool
     }
 
     /**
-     * @param array<string, mixed> $arguments
-     */
-    private function run(array $arguments, int $agentId, ?int $userId, bool $enriched): ToolResult
-    {
-        $prepared = $this->prepare($arguments, $agentId, $userId);
-        if ($prepared instanceof ToolResult) {
-            return $prepared;
-        }
-
-        try {
-            $data = $this->request(
-                $this->buildPayload($prepared, $enriched),
-                (string) $prepared['settings']['api_key'],
-                $this->effectiveTimeout($prepared['settings']),
-            );
-
-            return new ToolResult(
-                true,
-                $this->formatResults($data, $enriched, $prepared),
-                [
-                    'search_id' => is_string($data['search_id'] ?? null) ? $data['search_id'] : null,
-                    'market'    => $prepared['market'],
-                    'offset'    => $prepared['offset'],
-                    'enriched'  => $enriched,
-                ],
-            );
-        } catch (Throwable $e) {
-            $this->logger?->error(self::LOG_EXCEPTION, ['exception' => $e]);
-
-            return ToolResult::fail('Search tool error: ' . $e->getMessage());
-        }
-    }
-
-    /**
      * @param array<string, mixed> $payload
      * @return array<string, mixed>
      */
@@ -393,7 +437,7 @@ final class StaanSearchTool extends AbstractTool
         $this->logger?->debug(self::LOG_HTTP_REQUEST, [
             'method'  => 'POST',
             'url'     => self::ENDPOINT,
-            'headers' => ['Authorization' => 'Bearer ***', 'Content-Type' => 'application/json'],
+            'headers' => ['Authorization' => 'Bearer ***', 'Content-Type' => self::CONTENT_TYPE_JSON],
             'payload' => $payload,
             'timeout' => $timeout,
         ]);
@@ -401,8 +445,8 @@ final class StaanSearchTool extends AbstractTool
         $response = $this->httpClient->request('POST', self::ENDPOINT, [
             'headers' => [
                 'Authorization' => "Bearer {$apiKey}",
-                'Content-Type'  => 'application/json',
-                'Accept'        => 'application/json',
+                'Content-Type'  => self::CONTENT_TYPE_JSON,
+                'Accept'        => self::CONTENT_TYPE_JSON,
             ],
             'json'    => $payload,
             'timeout' => $timeout,
@@ -457,180 +501,30 @@ final class StaanSearchTool extends AbstractTool
     }
 
     /**
-     * @param array<string, mixed> $data
-     * @param array{query: string, market: string, offset: int, offset_capped: bool, excerpts: int, settings: array<string, mixed>} $prepared
-     */
-    private function formatResults(array $data, bool $enriched, array $prepared): string
-    {
-        $web = $data['web'] ?? [];
-        $results = is_array($web) && is_array($web['results'] ?? null) ? $web['results'] : [];
-
-        $limit = $this->clampInt(
-            $prepared['settings']['result_limit'] ?? null,
-            self::DEFAULT_RESULT_LIMIT,
-            1,
-            self::PAGE_SIZE,
-        );
-        $shown = array_slice($results, 0, $limit);
-
-        $heading = $enriched
-            ? "Staan enriched results for '{$prepared['query']}' (ranked by excerpt relevance):"
-            : "Staan web results for '{$prepared['query']}':";
-
-        if ($shown === []) {
-            return "{$heading}\n\nNo results found.\n";
-        }
-
-        $output = "{$heading}\n\n";
-        $unfetched = 0;
-
-        foreach ($shown as $index => $result) {
-            if (is_array($result) && $enriched && !$this->hasChunks($result)) {
-                $unfetched++;
-            }
-            $output .= $this->formatResult(is_array($result) ? $result : [], $index + 1, $enriched);
-        }
-
-        return $output . $this->formatFooter($data, $enriched, $unfetched, $prepared, count($results), $limit);
-    }
-
-    /**
-     * @param array<string, mixed> $result
-     */
-    private function hasChunks(array $result): bool
-    {
-        $chunks = $result['extra_snippets'] ?? null;
-
-        return is_array($chunks) && $chunks !== [];
-    }
-
-    /**
-     * @param array<string, mixed> $result
-     */
-    private function formatResult(array $result, int $position, bool $enriched): string
-    {
-        $output = sprintf("[%d] %s\n", $position, $this->text($result['title'] ?? null) ?: '(untitled)');
-
-        $url = $this->text($result['url'] ?? null);
-        if ($url !== '') {
-            $output .= "URL: {$url}\n";
-        }
-
-        $host = $this->text($result['hostname'] ?? null);
-        if ($host !== '') {
-            $output .= "Host: {$host}\n";
-        }
-
-        $published = $this->text($result['published_date'] ?? null);
-        if ($published !== '') {
-            $output .= "Published: {$published}\n";
-        }
-
-        $snippet = $this->text($result['snippet'] ?? null);
-        if ($snippet !== '') {
-            $output .= "Snippet: {$snippet}\n";
-        }
-
-        if ($enriched) {
-            $output .= $this->hasChunks($result)
-                ? $this->formatChunks($result)
-                : "(no page excerpt available for this result — the plain snippet is shown instead)\n";
-        }
-
-        return $output . "\n";
-    }
-
-    /**
-     * @param array<string, mixed> $result
-     */
-    private function formatChunks(array $result): string
-    {
-        $chunks = $result['extra_snippets'];
-        $output = '';
-
-        foreach ($chunks as $chunk) {
-            if (!is_array($chunk)) {
-                continue;
-            }
-            $text = $this->truncate($this->text($chunk['chunk'] ?? null));
-            if ($text === '') {
-                continue;
-            }
-            $score = is_numeric($chunk['score'] ?? null) ? number_format((float) $chunk['score'], 2) : '?';
-            $output .= "  [{$score}] {$text}\n";
-        }
-
-        return $output;
-    }
-
-    /**
-     * @param array<string, mixed> $data
-     * @param array{query: string, market: string, offset: int, offset_capped: bool, excerpts: int, settings: array<string, mixed>} $prepared
-     */
-    private function formatFooter(
-        array $data,
-        bool $enriched,
-        int $unfetched,
-        array $prepared,
-        int $total,
-        int $limit,
-    ): string {
-        $notes = [];
-        $queryMeta = is_array($data['query'] ?? null) ? $data['query'] : [];
-
-        $altered = $this->text($queryMeta['altered_query'] ?? null);
-        if ($altered !== '' && $altered !== $prepared['query']) {
-            $notes[] = "The search engine rewrote the query to \"{$altered}\" — the results answer that, not the text you sent.";
-        }
-
-        if ($enriched && $unfetched > 0) {
-            $notes[] = "{$unfetched} of {$total} result pages could not be extracted (anti-bot wall, timeout, or no excerpt above the minimum score); their plain snippet is shown instead. Consider a differently-worded query, or `search` for the raw result list.";
-        }
-
-        if ($total > $limit) {
-            $notes[] = "Showing the first {$limit} of {$total} results. Raise the \"Results returned to the agent\" setting or pass a higher `offset` to see the rest.";
-        }
-
-        if ($prepared['offset_capped']) {
-            $notes[] = "Offset was rounded to page {$prepared['offset']} — Staan's maximum is " . self::MAX_OFFSET . ' (40 results).';
-        }
-
-        return $notes === [] ? '' : "\n" . implode("\n", array_map(
-            static fn(string $note): string => "Note: {$note}",
-            $notes,
-        )) . "\n";
-    }
-
-    private function text(mixed $value): string
-    {
-        return is_scalar($value) ? trim((string) $value) : '';
-    }
-
-    private function truncate(string $text, int $limit = self::MAX_CHUNK_CHARS): string
-    {
-        if (mb_strlen($text) <= $limit) {
-            return $text;
-        }
-
-        return rtrim(mb_substr($text, 0, $limit)) . '… [truncated]';
-    }
-
-    /**
-     * Operator-set numerics are clamped rather than rejected: a typo in a
-     * settings field should degrade the retrieval quality, not break the call.
+     * The setting is tested before it is clamped, so `0` and a negative value
+     * fall through to the env var and the 30s default rather than collapsing to
+     * a one-second timeout. Operator-set numerics are otherwise clamped rather
+     * than rejected: a typo should degrade the call, not break it.
      *
      * @param array<string, mixed> $settings
      */
     private function effectiveTimeout(array $settings): int
     {
-        $configured = $this->clampInt($settings['http_timeout'] ?? null, 0, 1, 300);
-        if ($configured > 0) {
-            return $configured;
+        $configured = $this->positiveIntOrNull($settings['http_timeout'] ?? null);
+        if ($configured !== null) {
+            return min(self::MAX_TIMEOUT, $configured);
         }
 
-        $env = (int) ($_ENV['SPORA_TOOL_HTTP_TIMEOUT'] ?? getenv('SPORA_TOOL_HTTP_TIMEOUT') ?: 0);
+        $env = $this->positiveIntOrNull($_ENV['SPORA_TOOL_HTTP_TIMEOUT'] ?? getenv('SPORA_TOOL_HTTP_TIMEOUT') ?: null);
 
-        return $env > 0 ? $env : self::DEFAULT_TIMEOUT;
+        return $env === null ? self::DEFAULT_TIMEOUT : min(self::MAX_TIMEOUT, $env);
+    }
+
+    private function positiveIntOrNull(mixed $value): ?int
+    {
+        $int = $this->toIntOrNull($value);
+
+        return ($int !== null && $int > 0) ? $int : null;
     }
 
     private function clampInt(mixed $value, int $default, int $min, int $max): int
@@ -649,5 +543,10 @@ final class StaanSearchTool extends AbstractTool
         }
 
         return max($min, min($max, (float) $value));
+    }
+
+    private function text(mixed $value): string
+    {
+        return is_scalar($value) ? trim((string) $value) : '';
     }
 }

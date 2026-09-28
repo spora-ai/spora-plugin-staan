@@ -294,17 +294,37 @@ it('sends offset 0 when none is supplied', function () {
     expect($harness->sentPayload()['offset'])->toBe(0);
 });
 
-it('explains that the offset was capped at the api maximum', function () {
+it('explains that the offset was adjusted to a page boundary', function () {
     $result = harness()->call(['query' => 'vector db', 'offset' => 45]);
 
-    expect($result->content)->toContain('Note: Offset was rounded to page 30')
-        ->and($result->content)->toContain('maximum is 30');
+    expect($result->content)->toContain('Note: Offset was adjusted to page 30')
+        ->and($result->content)->toContain('blocks of 10')
+        ->and($result->content)->toContain('the last page is 30 (40 results)');
 });
+
+it('explains a mid-page offset without claiming the ceiling was reached', function () {
+    $result = harness()->call(['query' => 'vector db', 'offset' => 12]);
+
+    expect($result->content)->toContain('Note: Offset was adjusted to page 10')
+        ->and($result->content)->toContain('the last page is 30');
+});
+
+it('stays silent about a non-numeric offset instead of blaming the api ceiling', function (mixed $given) {
+    $result = harness()->call(['query' => 'vector db', 'offset' => $given]);
+
+    expect($result->content)->not->toContain('Note:');
+})->with([
+    'empty string' => '',
+    'words'        => 'abc',
+    'array'        => [[]],
+    'boolean'      => true,
+]);
 
 it('stays quiet about the offset when it was already valid', function () {
     $result = harness()->call(['query' => 'vector db', 'offset' => 10]);
 
-    expect($result->content)->not->toContain('rounded to page');
+    expect($result->content)->not->toContain('rounded to page')
+        ->and($result->content)->not->toContain('adjusted to page');
 });
 
 /* ------------------------------------------------------------ formatting -- */
@@ -494,6 +514,98 @@ it('never lets a transport exception escape', function () {
 
     expect($result->success)->toBeFalse()
         ->and($result->content)->toContain('Search tool error: connection reset');
+});
+
+/* ------------------------------------------------- review regression guards -- */
+
+it('falls back to the default timeout when the setting is zero or negative', function (string $given) {
+    $harness = harness(['http_timeout' => $given]);
+    $harness->call(['query' => 'vector db']);
+
+    expect($harness->sentTimeout())->toBe(30.0);
+})->with(['zero' => '0', 'negative' => '-3']);
+
+it('honours a real timeout setting', function () {
+    $harness = harness(['http_timeout' => '45']);
+    $harness->call(['query' => 'vector db']);
+
+    expect($harness->sentTimeout())->toBe(45.0);
+});
+
+it('caps an absurd timeout setting at five minutes', function () {
+    $harness = harness(['http_timeout' => '99999']);
+    $harness->call(['query' => 'vector db']);
+
+    expect($harness->sentTimeout())->toBe(300.0);
+});
+
+it('falls back to the configured market when the agent sends an empty string', function () {
+    $harness = harness(['market' => 'de-de']);
+    $harness->call(['query' => 'vektordatenbank', 'market' => '']);
+
+    expect($harness->sentPayload()['market'])->toBe('de-de');
+});
+
+it('counts only the pages it actually rendered in the footer', function () {
+    $results = array_map(static fn(int $i): array => aResult([
+        'title'          => "Page {$i}",
+        'extra_snippets' => $i === 1 ? [['chunk' => 'Extracted text.', 'score' => 0.9]] : [],
+    ]), range(1, 5));
+
+    // result_limit 2 means rows 3-5 are never fetched, so the footer must not
+    // claim knowledge of them.
+    $result = harness(['result_limit' => '2'], okBody($results))
+        ->call(['query' => 'vector db', 'action' => 'enriched_search']);
+
+    expect($result->content)->toContain('Note: 1 of 2 result pages could not be extracted')
+        ->and($result->content)->not->toContain('1 of 5');
+});
+
+it('renders a string-keyed results object instead of failing the search', function () {
+    $body = ['web' => ['results' => [
+        'first'  => aResult(['title' => 'First']),
+        'second' => aResult(['title' => 'Second']),
+    ]]];
+
+    $result = harness([], $body)->call(['query' => 'vector db']);
+
+    expect($result->success)->toBeTrue()
+        ->and($result->content)->toContain('[1] First')
+        ->and($result->content)->toContain('[2] Second');
+});
+
+it('marks a page whose excerpts are all blank as unextracted', function () {
+    $body = okBody([aResult(['extra_snippets' => [['chunk' => '   ']]])]);
+
+    $result = harness([], $body)->call(['query' => 'vector db', 'action' => 'enriched_search']);
+
+    expect($result->content)->toContain('(no page excerpt available for this result')
+        ->and($result->content)->toContain('Note: 1 of 1 result pages could not be extracted');
+});
+
+it('treats a malformed extra_snippets shape as unextracted rather than extracted', function () {
+    $body = okBody([aResult(['extra_snippets' => ['k' => 'v']])]);
+
+    $result = harness([], $body)->call(['query' => 'vector db', 'action' => 'enriched_search']);
+
+    expect($result->content)->toContain('(no page excerpt available for this result')
+        ->and($result->content)->toContain('Note: 1 of 1 result pages could not be extracted');
+});
+
+it('never puts the api key in the structured result data', function () {
+    $result = harness(['api_key' => 'staan_secret_key'])->call(['query' => 'vector db']);
+
+    expect($result->data)->not->toContain('staan_secret_key')
+        ->and($result->content)->not->toContain('staan_secret_key');
+});
+
+it('rejects a non-scalar query as empty instead of searching for the literal string "array"', function () {
+    $harness = harness();
+    $result = $harness->call(['query' => ['a']]);
+
+    expect($result->success)->toBeFalse()
+        ->and($result->content)->toContain('query cannot be empty')
+        ->and($harness->requests)->toBe([]);
 });
 
 /* ---------------------------------------------------------------- describe -- */
