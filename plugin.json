@@ -1,13 +1,13 @@
 {
     "$schema": "https://docs.spora-ai.com/schemas/plugin.schema.json",
-    "name": "spora-ai/spora-plugin-skeleton",
-    "slug": "skeleton",
-    "description": "Skeleton plugin — replace this with your plugin's description.",
-    "class": "Spora\\Plugins\\Skeleton\\SkeletonPlugin",
-    "icon": "puzzle",
+    "name": "spora-ai/spora-plugin-staan",
+    "slug": "staan",
+    "description": "EU-hosted web search via Staan — ranked results, or relevance-scored page excerpts for RAG.",
+    "class": "Spora\\Plugins\\Staan\\StaanPlugin",
+    "icon": "search",
     "autoload": {
         "psr-4": {
-            "Spora\\Plugins\\Skeleton\\": "src/"
+            "Spora\\Plugins\\Staan\\": "src/"
         }
     }
 }

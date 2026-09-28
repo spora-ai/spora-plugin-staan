@@ -1,11 +1,11 @@
 {
-    "name": "spora-ai/spora-plugin-skeleton",
-    "description": "Skeleton for Spora plugins — copy this repo to start a new one.",
+    "name": "spora-ai/spora-plugin-staan",
+    "description": "EU-hosted web search via Staan — ranked results, or relevance-scored page excerpts for RAG.",
     "type": "spora-plugin",
     "license": "MIT",
     "require": {
         "php": "^8.4.1",
-        "spora-ai/spora-core": "^0.28.0"
+        "spora-ai/spora-core": ">=0.18.0 <2.0.0"
     },
     "require-dev": {
         "friendsofphp/php-cs-fixer": "^3.94",
@@ -16,18 +16,19 @@
     },
     "autoload": {
         "psr-4": {
-            "Spora\\Plugins\\Skeleton\\": "src/"
+            "Spora\\Plugins\\Staan\\": "src/"
         }
     },
     "autoload-dev": {
         "psr-4": {
-            "Spora\\Plugins\\Skeleton\\Tests\\": "tests/"
+            "Spora\\Plugins\\Staan\\Tests\\": "tests/"
         }
     },
     "scripts": {
         "test": "pest",
         "analyse": "phpstan analyse --no-progress",
-        "lint": "php-cs-fixer fix --dry-run --diff --no-interaction"
+        "lint": "php-cs-fixer fix --dry-run --diff --no-interaction",
+        "format": "php-cs-fixer fix"
     },
     "config": {
         "optimize-autoloader": true,
