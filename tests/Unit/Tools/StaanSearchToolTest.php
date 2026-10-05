@@ -618,3 +618,20 @@ it('describes each operation differently', function () {
         ->and($harness->tool->describeAction(['query' => 'vector db', 'action' => 'enriched_search']))
         ->toBe("Search the web via Staan with scored page excerpts for: 'vector db'");
 });
+
+/* ----------------------------------------------------------------- owner -- */
+
+it('resolves the settings owner from the principal context, not the legacy user id', function () {
+    $config = Mockery::mock(Spora\Services\ToolConfigService::class);
+    $config->allows('getEffectiveSettings')
+        ->with(Spora\Plugins\Staan\Tools\StaanSearchTool::class, 1, 99)
+        ->andReturn([]);
+
+    $client = Mockery::mock(Symfony\Contracts\HttpClient\HttpClientInterface::class);
+    $context = new Spora\Services\PrincipalContext(7, Spora\Models\Principal::TYPE_USER, 99, 99);
+
+    $result = (new Spora\Plugins\Staan\Tools\StaanSearchTool($config, $client))
+        ->execute(['query' => 'vector db'], 1, 4242, null, $context);
+
+    expect($result->content)->toContain('API key is not configured');
+});
