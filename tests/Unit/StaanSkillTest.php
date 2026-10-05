@@ -56,10 +56,8 @@ it('scopes allowed-tools to the search tool only', function () {
 });
 
 it('declares the tool by the name the tool actually answers to', function () {
-    // The two are asserted as literals elsewhere, so a rename applied to only one
-    // of them leaves both green — and `allowed-tools` would then name a tool that
-    // does not exist, which core reports as a warning nobody reads. A renamed tool
-    // and a stale declaration is exactly the failure this pairs them against.
+    // Both are asserted as literals elsewhere, so renaming one alone leaves both
+    // green and `allowed-tools` names a tool that no longer exists.
     $attribute = (new ReflectionClass(StaanSearchTool::class))
         ->getAttributes(Tool::class)[0]
         ->newInstance();
