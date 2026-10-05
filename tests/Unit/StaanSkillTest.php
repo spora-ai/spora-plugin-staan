@@ -3,7 +3,6 @@
 declare(strict_types=1);
 
 use Spora\Plugins\Staan\StaanPlugin;
-use Spora\Plugins\Staan\Tools\StaanSearchTool;
 
 function staanSkillFile(): string
 {
@@ -51,7 +50,7 @@ it('carries a description long enough for skill discovery', function () {
 it('scopes allowed-tools to the search tool only', function () {
     $allowed = staanSkillFrontmatter(staanSkillFile())['allowed-tools'] ?? '';
 
-    expect($allowed)->toBe(StaanSearchTool::class);
+    expect($allowed)->toBe('search');
 });
 
 it('documents both operations and the site operators', function () {
