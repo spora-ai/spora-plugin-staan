@@ -3,6 +3,8 @@
 declare(strict_types=1);
 
 use Spora\Plugins\Staan\StaanPlugin;
+use Spora\Plugins\Staan\Tools\StaanSearchTool;
+use Spora\Tools\Attributes\Tool;
 
 function staanSkillFile(): string
 {
@@ -50,7 +52,20 @@ it('carries a description long enough for skill discovery', function () {
 it('scopes allowed-tools to the search tool only', function () {
     $allowed = staanSkillFrontmatter(staanSkillFile())['allowed-tools'] ?? '';
 
-    expect($allowed)->toBe('search');
+    expect($allowed)->toBe('staan_search');
+});
+
+it('declares the tool by the name the tool actually answers to', function () {
+    // The two are asserted as literals elsewhere, so a rename applied to only one
+    // of them leaves both green — and `allowed-tools` would then name a tool that
+    // does not exist, which core reports as a warning nobody reads. A renamed tool
+    // and a stale declaration is exactly the failure this pairs them against.
+    $attribute = (new ReflectionClass(StaanSearchTool::class))
+        ->getAttributes(Tool::class)[0]
+        ->newInstance();
+
+    expect(staanSkillFrontmatter(staanSkillFile())['allowed-tools'] ?? '')
+        ->toBe($attribute->name);
 });
 
 it('documents both operations and the site operators', function () {

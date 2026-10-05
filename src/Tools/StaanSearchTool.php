@@ -38,7 +38,14 @@ use Throwable;
  * `allowed_skills` picker. Re-add the argument once v0.29.0 ships.
  */
 #[Tool(
-    name: 'search',
+    name: 'staan_search',
+    // Slug-prefixed like every other search tool in the ecosystem
+    // (serper_search, tavily_search, worldnews_search, scholar_search, …).
+    // A bare `search` was the only one of its kind, and the name→class map that
+    // resolves it is last-wins with no collision check — so a second plugin
+    // declaring `search` would silently re-point a skill's declaration at the
+    // wrong tool with nothing reporting an error. The operation below stays bare
+    // `search`, which is the convention: prefixed tool, bare operation.
     description: 'Search the web via Staan (api.staan.ai), a Qwant-powered search engine hosted in the EU. Two modes: `search` returns a fast ranked result list (title, URL, snippet, publication date). `enriched_search` additionally fetches each result page and returns relevance-scored excerpts of the actual page text, reranked by that relevance — slower, but the excerpts can be quoted directly. Both modes support Google-style `site:` / `-site:` operators inside the query.',
     displayName: 'Staan Search',
     category: 'research',
