@@ -38,7 +38,10 @@ use Throwable;
  * `allowed_skills` picker. Re-add the argument once v0.29.0 ships.
  */
 #[Tool(
-    name: 'search',
+    name: 'staan_search',
+    // Prefixed like every other search tool; the name→class map is last-wins with
+    // no collision check, so a bare `search` would let a second plugin silently
+    // re-point a skill's declaration. The operation stays bare.
     description: 'Search the web via Staan (api.staan.ai), a Qwant-powered search engine hosted in the EU. Two modes: `search` returns a fast ranked result list (title, URL, snippet, publication date). `enriched_search` additionally fetches each result page and returns relevance-scored excerpts of the actual page text, reranked by that relevance — slower, but the excerpts can be quoted directly. Both modes support Google-style `site:` / `-site:` operators inside the query.',
     displayName: 'Staan Search',
     category: 'research',
