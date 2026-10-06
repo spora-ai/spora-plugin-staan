@@ -6,7 +6,7 @@ compatibility: spora>=0.7 spora-plugin-staan>=0.1
 metadata:
   author: spora-ai
   version: "1.0"
-allowed-tools: Spora\Plugins\Staan\Tools\StaanSearchTool
+allowed-tools: staan_search
 ---
 
 # Staan search

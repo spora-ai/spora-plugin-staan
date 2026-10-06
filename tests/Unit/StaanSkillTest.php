@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Spora\Plugins\Staan\StaanPlugin;
 use Spora\Plugins\Staan\Tools\StaanSearchTool;
+use Spora\Tools\Attributes\Tool;
 
 function staanSkillFile(): string
 {
@@ -51,7 +52,18 @@ it('carries a description long enough for skill discovery', function () {
 it('scopes allowed-tools to the search tool only', function () {
     $allowed = staanSkillFrontmatter(staanSkillFile())['allowed-tools'] ?? '';
 
-    expect($allowed)->toBe(StaanSearchTool::class);
+    expect($allowed)->toBe('staan_search');
+});
+
+it('declares the tool by the name the tool actually answers to', function () {
+    // Both are asserted as literals elsewhere, so renaming one alone leaves both
+    // green and `allowed-tools` names a tool that no longer exists.
+    $attribute = (new ReflectionClass(StaanSearchTool::class))
+        ->getAttributes(Tool::class)[0]
+        ->newInstance();
+
+    expect(staanSkillFrontmatter(staanSkillFile())['allowed-tools'] ?? '')
+        ->toBe($attribute->name);
 });
 
 it('documents both operations and the site operators', function () {

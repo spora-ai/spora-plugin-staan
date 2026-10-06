@@ -80,10 +80,10 @@ it('does not declare a hand-rolled action parameter', function () {
     expect(staanAttribute(ToolParameter::class, 'action'))->toBeNull();
 });
 
-it('names the tool search so the wire name is staan:search', function () {
+it('names the tool staan_search, so the wire name is staan:staan_search', function () {
     $tool = staanAttributes(Tool::class)[0];
 
-    expect($tool->name)->toBe('search')
+    expect($tool->name)->toBe('staan_search')
         ->and($tool->displayName)->toBe('Staan Search')
         ->and($tool->category)->toBe('research')
         ->and($tool->icon)->toBe('search');
