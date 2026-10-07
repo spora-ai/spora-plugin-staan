@@ -36,8 +36,10 @@ jobs:
           coverage: none
           tools: composer
 
+      # spora-core resolves from Packagist against the declared floor,
+      # so a green run proves real-world compatibility.
       - name: Composer install
-        run: composer install --no-interaction --prefer-dist
+        run: composer update spora-ai/spora-core --with-all-dependencies --no-interaction --prefer-dist
 
       - name: Run Pest
         run: ./vendor/bin/pest
@@ -56,8 +58,10 @@ jobs:
           coverage: none
           tools: composer
 
+      # spora-core resolves from Packagist against the declared floor,
+      # so a green run proves real-world compatibility.
       - name: Composer install
-        run: composer install --no-interaction --prefer-dist
+        run: composer update spora-ai/spora-core --with-all-dependencies --no-interaction --prefer-dist
 
       - name: Run PHPStan
         run: ./vendor/bin/phpstan analyse --no-progress
@@ -76,8 +80,10 @@ jobs:
           coverage: none
           tools: composer
 
+      # spora-core resolves from Packagist against the declared floor,
+      # so a green run proves real-world compatibility.
       - name: Composer install
-        run: composer install --no-interaction --prefer-dist
+        run: composer update spora-ai/spora-core --with-all-dependencies --no-interaction --prefer-dist
 
       - name: Check code style
         # Same ruleset as Spora core's .php-cs-fixer.php so plugin style matches host.
@@ -100,8 +106,10 @@ jobs:
           coverage: xdebug
           tools: composer
 
+      # spora-core resolves from Packagist against the declared floor,
+      # so a green run proves real-world compatibility.
       - name: Composer install
-        run: composer install --no-interaction --prefer-dist
+        run: composer update spora-ai/spora-core --with-all-dependencies --no-interaction --prefer-dist
 
       - name: Generate clover coverage report
         run: ./vendor/bin/pest --coverage-clover=coverage.xml

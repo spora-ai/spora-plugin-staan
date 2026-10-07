@@ -631,7 +631,7 @@ it('resolves the settings owner from the principal context, not the legacy user 
     $context = new Spora\Services\PrincipalContext(7, Spora\Models\Principal::TYPE_USER, 99, 99);
 
     $result = (new Spora\Plugins\Staan\Tools\StaanSearchTool($config, $client))
-        ->execute(['query' => 'vector db'], 1, 4242, null, $context);
+        ->execute(['query' => 'vector db'], 1, null, $context);
 
     expect($result->content)->toContain('API key is not configured');
 });
