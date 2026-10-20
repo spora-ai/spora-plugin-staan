@@ -229,8 +229,8 @@ final class StaanSearchTool extends AbstractTool
         $query = $this->text($arguments['query'] ?? null);
 
         return $this->getOperationName($arguments) === 'enriched_search'
-            ? "Search the web via Staan with scored page excerpts for: '{$query}'"
-            : "Search the web via Staan for: '{$query}'";
+            ? sprintf("Search the web via Staan with scored page excerpts for: '%s'", $query)
+            : sprintf("Search the web via Staan for: '%s'", $query);
     }
 
     /**
