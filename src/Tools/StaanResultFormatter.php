@@ -23,9 +23,9 @@ namespace Spora\Plugins\Staan\Tools;
 final class StaanResultFormatter
 {
     /**
-     * Per-excerpt cap. Staan's chunks run 300-1800 characters; 800 keeps the
-     * opening of a typical chunk and bounds the worst case at
-     * result_limit x max_snippets x 800 characters of injected context.
+     * Per-excerpt cap. 800 keeps the opening of a typical chunk and bounds
+     * the worst case at result_limit x max_snippets x 800 characters of
+     * injected context.
      */
     private const MAX_CHUNK_CHARS = 800;
 
@@ -96,9 +96,6 @@ final class StaanResultFormatter
         return $web['results'];
     }
 
-    /**
-     * @param mixed $result
-     */
     private function formatRow(mixed $result, int $position, string $excerpts): string
     {
         $row = is_array($result) ? $result : [];
@@ -120,9 +117,6 @@ final class StaanResultFormatter
         return $output . $excerpts . "\n";
     }
 
-    /**
-     * @param mixed $result
-     */
     private function formatExcerpts(mixed $result): string
     {
         if (!is_array($result)) {
