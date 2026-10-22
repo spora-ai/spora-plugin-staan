@@ -26,8 +26,8 @@ final class StaanPlugin extends AbstractPlugin
     }
 
     /**
-     * Ships the `staan-search` skill, which teaches the agent when to reach for
-     * `enriched_search` over `search` and how to render the returned URLs.
+     * Ships the `staan-search` skill: when to reach for `enriched_search`
+     * over `search`, and how to render the returned URLs.
      *
      * @return string[]
      */
@@ -35,6 +35,18 @@ final class StaanPlugin extends AbstractPlugin
     {
         return [
             __DIR__ . '/../skills',
+        ];
+    }
+
+    /**
+     * The plugin's `locales/` directory — one `<lang>.json` per language.
+     *
+     * @return string[]
+     */
+    public function translationsPaths(): array
+    {
+        return [
+            __DIR__ . '/../locales',
         ];
     }
 }

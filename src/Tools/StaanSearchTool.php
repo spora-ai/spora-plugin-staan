@@ -21,27 +21,18 @@ use Throwable;
  * Web search via Staan (api.staan.ai) — Qwant's EU-hosted search index.
  *
  * One HTTP endpoint serves both modes; enrichment is switched on by adding
- * `extra_snippets` to the payload rather than by calling a different URL. The
- * two operations therefore share a single request path and differ only in
- * three payload fields plus latency. Rendering lives in
- * {@see StaanResultFormatter}.
+ * `extra_snippets` to the payload rather than by calling a different URL.
+ * Rendering lives in {@see StaanResultFormatter}.
  *
  * `search` is declared first on purpose: {@see \Spora\Tools\Traits\HasOperations}
  * falls back to the first operation when the LLM omits the `action`
  * discriminator, so an unadorned call lands on the fast, cheap path.
- *
- * The `recommendsSkills` argument is deliberately absent from the #[Tool]
- * attribute: it only exists in spora-core's unreleased branch, so declaring it
- * would raise `Error: Unknown named parameter` on boot against the released
- * v0.28.0. The bundled `staan-search` skill is still discovered through
- * `StaanPlugin::skillPaths()` and can be attached via the Skill tool's
- * `allowed_skills` picker. Re-add the argument once v0.29.0 ships.
  */
 #[Tool(
     name: 'staan_search',
-    // Prefixed like every other search tool; the name→class map is last-wins with
-    // no collision check, so a bare `search` would let a second plugin silently
-    // re-point a skill's declaration. The operation stays bare.
+    // Prefixed like every other search tool: the name→class map is last-wins
+    // with no collision check, so a bare `search` would let a second plugin
+    // silently re-point a skill's declaration. The operation stays bare.
     description: 'Search the web via Staan (api.staan.ai), a Qwant-powered search engine hosted in the EU. Two modes: `search` returns a fast ranked result list (title, URL, snippet, publication date). `enriched_search` additionally fetches each result page and returns relevance-scored excerpts of the actual page text, reranked by that relevance — slower, but the excerpts can be quoted directly. Both modes support Google-style `site:` / `-site:` operators inside the query.',
     displayName: 'Staan Search',
     category: 'research',
@@ -170,9 +161,8 @@ final class StaanSearchTool extends AbstractTool
     private const MAX_ERROR_BODY_CHARS = 300;
 
     /**
-     * The full market list from the v2 API reference. The prose guides only
-     * advertise fr-fr / en-us / de-de, and the reference page collapses the
-     * tail of its enum behind a "show 4 more" control.
+     * The full market list from the v2 API reference — the prose guides
+     * advertise only fr-fr / en-us / de-de.
      */
     private const MARKETS = [
         'fr-fr', 'de-de',
@@ -229,8 +219,8 @@ final class StaanSearchTool extends AbstractTool
         $query = $this->text($arguments['query'] ?? null);
 
         return $this->getOperationName($arguments) === 'enriched_search'
-            ? "Search the web via Staan with scored page excerpts for: '{$query}'"
-            : "Search the web via Staan for: '{$query}'";
+            ? sprintf("Search the web via Staan with scored page excerpts for: '%s'", $query)
+            : sprintf("Search the web via Staan for: '%s'", $query);
     }
 
     /**
